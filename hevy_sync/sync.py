@@ -37,8 +37,6 @@ def load_variable(env_var, secrets_file):
 
 GARMIN_USERNAME = load_variable('GARMIN_USERNAME', "/run/secrets/garmin_username")
 GARMIN_PASSWORD = load_variable('GARMIN_PASSWORD', "/run/secrets/garmin_password")
-TRAINERROAD_USERNAME = load_variable('TRAINERROAD_USERNAME', "/run/secrets/trainerroad_username")
-TRAINERROAD_PASSWORD = load_variable('TRAINERROAD_PASSWORD', "/run/secrets/trainerroad_password")
 
 
 
@@ -70,24 +68,6 @@ def get_args():
         type=str,
         metavar="GARMIN_PASSWORD",
         help="Password to log in to Garmin Connect.",
-    )
-
-    parser.add_argument(
-        "--trainerroad-username",
-        "--tu",
-        default=TRAINERROAD_USERNAME,
-        type=str,
-        metavar="TRAINERROAD_USERNAME",
-        help="Username to log in to TrainerRoad.",
-    )
-
-    parser.add_argument(
-        "--trainerroad-password",
-        "--tp",
-        default=TRAINERROAD_PASSWORD,
-        type=str,
-        metavar="TRAINERROAD_PASSWORD",
-        help="Password to log in to TrainerRoad.",
     )
 
     parser.add_argument(
@@ -129,7 +109,7 @@ def get_args():
     parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Won't upload to Garmin Connect or TrainerRoad.",
+        help="Won't upload to Garmin Connect.",
     )
 
     parser.add_argument(
@@ -155,19 +135,6 @@ def sync_garmin(fit_file):
     garmin = GarminConnect()
     garmin.login(ARGS.garmin_username, ARGS.garmin_password)
     return garmin.upload_file(fit_file)
-
-
-def sync_trainerroad(last_weight):
-    """Sync measured weight to TrainerRoad"""
-    t_road = TrainerRoad(ARGS.trainerroad_username, ARGS.trainerroad_password)
-    t_road.connect()
-    logging.info("Current TrainerRoad weight: %s kg ", t_road.weight)
-    logging.info("Updating TrainerRoad weight to %s kg", last_weight)
-    wt = round(last_weight, 1)
-    t_road.weight = wt
-    t_road.disconnect()
-
-    return wt
 
 
 def generate_fitdata(syncdata):
@@ -408,7 +375,7 @@ def write_to_file_when_needed(fit_data_weigth, fit_data_blood_pressure, json_dat
 
 
 def sync():
-    """Sync measurements from Hevy to Garmin a/o TrainerRoad"""
+    """Sync measurements from Hevy to Garmin"""
 
     # Hevy API
     hevy = HevyAccount()
@@ -444,18 +411,6 @@ def sync():
         # get weight entries (in case of only blood_pressure)
         only_weight_entries = list(filter(lambda x: (x["type"] == "weight"), syncdata))
         last_weight_exists = len(only_weight_entries) > 0
-        # Upload to Trainer Road
-        if ARGS.trainerroad_username and last_weight_exists:
-            # sort and get last weight
-            last_weight_measurement = sorted(only_weight_entries, key=lambda x: x["date_time"])[-1]
-            last_weight = last_weight_measurement["weight"]
-            logging.info("Trainerroad username set -- attempting to sync")
-            logging.info(" Last weight %s", last_weight)
-            logging.info(" Measured %s", last_date_time)
-            if sync_trainerroad(last_weight):
-                logging.info("TrainerRoad update done!")
-        else:
-            logging.info("No TrainerRoad username or a new measurement " "- skipping sync")
 
         # Upload to Garmin Connect
         if ARGS.garmin_username and (
