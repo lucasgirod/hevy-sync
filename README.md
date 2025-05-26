@@ -33,13 +33,13 @@ optional arguments:
                         Write downloaded measurements to file.
   --features            Enable Features
                         BLOOD_PRESSURE = sync blood pressure
-  --no-upload           Won't upload to Garmin Connect or TrainerRoad.
+  --no-upload           Won't upload to Garmin Connect.
   --verbose, -v         Run verbosely
 ```
 
 ### Providing credentials via environment variables
 
-You can use the following environment variables for providing the Garmin and/or Trainerroad credentials:
+You can use the following environment variables for providing the Garmin credentials:
 
 - `GARMIN_USERNAME`
 - `GARMIN_PASSWORD`
@@ -49,7 +49,7 @@ has the same effect as placing the variables in a `.env` file in the working dir
 
 ### Providing credentials via secrets files
 
-You can also populate the following 'secrets' files to provide the Garmin and/or Trainerroad credentials:
+You can also populate the following 'secrets' files to provide the Garmin credentials:
 
 - `/run/secrets/garmin_username`
 - `/run/secrets/garmin_password`
@@ -242,7 +242,7 @@ This will run the job every 3 hours (at a random minute) and writing the output 
 
 ## Release
 
-Release works via the GitHub [Draft a new Release](https://github.com/jaroslawhartman/hevy-sync/releases/new) 
+Release works via the GitHub [Draft a new Release](https://github.com/lucasgirod/hevy-sync/releases/new) 
 function.
 The `version` key in `setup.py` will be bumped automatically (Version will be written to setup.py file).
 
@@ -261,9 +261,9 @@ This needs the permission on the [pypi-project](https://pypi.org/project/hevy-sy
 ## References
 
 * SSO authorization derived from https://github.com/cpfair/tapiriik
-* TrainerRoad API from https://github.com/stuwilkins/python-trainerroad
 
 ## Credits / Authors
 
-* Based on [hevy-garmin](https://github.com/ikasamah/hevy-garmin) by Masayuki Hamasaki, improved to support SSO authorization in Garmin Connect 2.
-* Based on [hevy-garmin-v2](https://github.com/jaroslawhartman/hevy-garmin-v2) by Jarek Hartman, improved Python 3 compatability, code-style and setuptools packaging, Kubernetes and Docker support. 
+* Based on [withings-sync](https://github.com/jaroslawhartman/withings-sync) by Jarek Hartman.
+* Based on [withings-garmin](https://github.com/ikasamah/withings-garmin) by Masayuki Hamasaki, improved to support SSO authorization in Garmin Connect 2.
+* Based on [withings-garmin-v2](https://github.com/jaroslawhartman/withings-garmin-v2) by Jarek Hartman, improved Python 3 compatability, code-style and setuptools packaging, Kubernetes and Docker support. 
