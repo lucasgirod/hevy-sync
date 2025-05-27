@@ -10,15 +10,12 @@ import requests
 log = logging.getLogger("hevy")
 
 HOME = os.environ.get("HOME", ".")
-AUTHORIZE_URL = "https://account.hevy.com/oauth2_user/authorize2"
-TOKEN_URL = "https://wbsapi.hevy.net/v2/oauth2"
-GETMEAS_URL = "https://wbsapi.hevy.net/measure?action=getmeas"
 
 APP_CONFIG = os.environ.get(
-    "WITHINGS_APP",
+    "HEVY_APP",
     pkg_resources.resource_filename(__name__, "config/hevy_app.json"),
 )
-USER_CONFIG = os.environ.get("WITHINGS_USER", HOME + "/.hevy_user.json")
+USER_CONFIG = os.environ.get("HEVY_USER", HOME + "/.hevy_user.json")
 
 
 class HevyException(Exception):
@@ -50,151 +47,9 @@ class HevyConfig:
             json.dump(self.config, configfile, indent=4, sort_keys=True)
 
 
-class HevyOAuth2:
-    """This class takes care of the Hevy OAuth2 authentication"""
-
-    app_config = user_config = None
-
-    def __init__(self):
-        app_cfg = HevyConfig(APP_CONFIG)
-        self.app_config = app_cfg.config
-
-        self.user_cfg = HevyConfig(USER_CONFIG)
-        self.user_config = self.user_cfg.config
-
-        if not self.user_config.get("access_token"):
-            if not self.user_config.get("authentification_code"):
-                self.user_config[
-                    "authentification_code"
-                ] = self.get_authenticationcode()
-            try:
-                self.get_accesstoken()
-            except Exception as e:
-                log.warning("Could not get access-token. Trying to renew auth_code")
-                self.user_config[
-                    "authentification_code"
-                ] = self.get_authenticationcode()
-                self.get_accesstoken()
-
-
-        self.refresh_accesstoken()
-
-        self.user_cfg.write()
-
-    def update_config(self):
-        """updates config file"""
-        self.user_cfg.write()
-
-    def get_authenticationcode(self):
-        """get Hevy authentication code"""
-        params = {
-            "response_type": "code",
-            "client_id": self.app_config["client_id"],
-            "state": "OK",
-            "scope": "user.metrics",
-            "redirect_uri": self.app_config["callback_url"],
-        }
-
-        log.warning(
-            "User interaction needed to get Authentification " "Code from Hevy!"
-        )
-        log.warning("")
-        log.warning(
-            "Open the following URL in your web browser and copy back "
-            "the token. You will have *30 seconds* before the "
-            "token expires. HURRY UP!"
-        )
-        log.warning("(This is one-time activity)")
-        log.warning("")
-
-        url = AUTHORIZE_URL + "?"
-
-        for key, value in params.items():
-            url = url + key + "=" + value + "&"
-
-        log.info(url)
-        log.info("")
-
-        authentification_code = input("Token : ")
-
-        return authentification_code
-
-    def get_accesstoken(self):
-        """get Hevy access token"""
-        log.info("Get Access Token")
-
-        params = {
-            "action": "requesttoken",
-            "grant_type": "authorization_code",
-            "client_id": self.app_config["client_id"],
-            "client_secret": self.app_config["consumer_secret"],
-            "code": self.user_config["authentification_code"],
-            "redirect_uri": self.app_config["callback_url"],
-        }
-
-        req = requests.post(TOKEN_URL, params)
-        resp = req.json()
-
-        status = resp.get("status")
-        body = resp.get("body")
-
-        if status != 0:
-            log.error("Received error code: %d", status)
-            log.error(
-                "Check here for an interpretation of this error: "
-                "http://developer.hevy.com/api-reference#section/Response-status"
-            )
-            log.error("")
-            log.error(
-                "If it's regarding an invalid code, try to start the"
-                " script again to obtain a new link."
-            )
-            raise
-
-        self.user_config["access_token"] = body.get("access_token")
-        self.user_config["refresh_token"] = body.get("refresh_token")
-        self.user_config["userid"] = body.get("userid")
-
-    def refresh_accesstoken(self):
-        """refresh Hevy access token"""
-        log.info("Refresh Access Token")
-
-        params = {
-            "action": "requesttoken",
-            "grant_type": "refresh_token",
-            "client_id": self.app_config["client_id"],
-            "client_secret": self.app_config["consumer_secret"],
-            "refresh_token": self.user_config["refresh_token"],
-        }
-
-        req = requests.post(TOKEN_URL, params)
-        resp = req.json()
-
-        status = resp.get("status")
-        body = resp.get("body")
-
-        if status != 0:
-            log.error("Received error code: %d", status)
-            log.error(
-                "Check here for an interpretation of this error: "
-                "http://developer.hevy.com/api-reference#section/Response-status"
-            )
-            log.error("")
-            log.error(
-                "If it's regarding an invalid code, try to start the"
-                " script again to obtain a new link."
-            )
-
-        self.user_config["access_token"] = body.get("access_token")
-        self.user_config["refresh_token"] = body.get("refresh_token")
-        self.user_config["userid"] = body.get("userid")
-
 
 class HevyAccount:
     """This class gets measurements from Hevy"""
-
-    def __init__(self):
-        self.hevy = HevyOAuth2()
 
     def get_lastsync(self):
         """get last sync timestamp"""

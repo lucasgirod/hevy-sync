@@ -8,6 +8,8 @@ RUN apk add --no-cache --virtual .build-deps \
     apk del .build-deps && \
     apk add --no-cache libxslt libxml2
 
+RUN pip install --upgrade pip
+
 RUN mkdir -p /src
 COPY . /src
 
