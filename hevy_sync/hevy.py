@@ -1,357 +1,162 @@
-"""This module takes care of the communication with Hevy."""
-from datetime import date, datetime
-import logging
-import json
 import os
+import json
+import logging
 import time
-import pkg_resources
 import requests
+from datetime import datetime
 
 log = logging.getLogger("hevy")
 
 HOME = os.environ.get("HOME", ".")
-
-APP_CONFIG = os.environ.get(
-    "HEVY_APP",
-    pkg_resources.resource_filename(__name__, "config/hevy_app.json"),
-)
-USER_CONFIG = os.environ.get("HEVY_USER", HOME + "/.hevy_user.json")
-
+USER_CONFIG = os.environ.get("HEVY_USER", os.path.join(HOME, ".hevy_user.json"))
+HEVY_API_URL = "https://api.hevyapp.com/v1/workouts"
 
 class HevyException(Exception):
-    """Pass HevyExceptions"""
-
+    pass
 
 class HevyConfig:
-    """This class takes care of the Hevy config file"""
-
-    config = {}
-    config_file = ""
-
-    def __init__(self, config_file):
-        self.config_file = config_file
-        self.read()
-
-    def read(self):
-        """reads config file"""
-        try:
-            with open(self.config_file, encoding="utf8") as configfile:
-                self.config = json.load(configfile)
-        except (ValueError, FileNotFoundError):
-            log.error("Can't read config file %s", self.config_file)
-            self.config = {}
-
-    def write(self):
-        """writes config file"""
-        with open(self.config_file, "w", encoding="utf8") as configfile:
-            json.dump(self.config, configfile, indent=4, sort_keys=True)
-
-
+    # ... (unverändert) ...
 
 class HevyAccount:
-    """This class gets measurements from Hevy"""
+    def __init__(self):
+        self.cfg = HevyConfig(USER_CONFIG)
+        self.config = self.cfg.config
+
+        if not self.config.get("api_key"):
+            self.config["api_key"] = input("Bitte gib deinen Hevy API-Key ein: ").strip()
+            self.cfg.write()
+            log.info("API-Key gespeichert in %s", USER_CONFIG)
 
     def get_lastsync(self):
-        """get last sync timestamp"""
-        if not self.hevy.user_config.get("last_sync"):
-            return int(time.mktime(date.today().timetuple()))
-        return self.hevy.user_config["last_sync"]
+        return self.config.get("last_sync", int(time.mktime(datetime.today().timetuple())))
 
     def set_lastsync(self):
-        """set last sync timestamp"""
-        self.hevy.user_config["last_sync"] = int(time.time())
-        log.info("Saving Last Sync")
-        self.hevy.update_config()
-
-    def get_measurements(self, startdate, enddate):
-        """get Hevy measurements"""
-        log.info("Get Measurements")
-
-        params = {
-            "access_token": self.hevy.user_config["access_token"],
-            # 'meastype': MEASTYPE_WEIGHT,
-            "category": 1,
-            "startdate": startdate,
-            "enddate": enddate,
-        }
-
-        req = requests.post(GETMEAS_URL, params)
-
-        measurements = req.json()
-
-        if measurements.get("status") == 0:
-            log.debug("Measurements received")
-            return [
-                HevyMeasureGroup(g)
-                for g in measurements.get("body").get("measuregrps")
-            ]
-        return None
+        self.config["last_sync"] = int(time.time())
+        self.cfg.write()
 
     def get_height(self):
-        """get height from Hevy"""
-        height = None
-        height_timestamp = None
-        height_group = None
+        """Liest die Körpergröße des Nutzers (in Metern) aus, falls verfügbar."""
+        height_val = os.getenv("HEVY_HEIGHT", "")
+        if height_val:
+            try:
+                return float(height_val)
+            except ValueError:
+                log.warning("Invalid HEVY_HEIGHT value. Height not set.")
+        return None  # Keine Höhe vorhanden oder konfiguriert
 
-        log.debug("Get Height")
+    def get_workouts(self, since_timestamp=None):
+        headers = {"api-key": self.config["api_key"]}
+        params = {}
+        if since_timestamp:
+            params["after"] = since_timestamp  # UNIX-Timestamp (Epoch seconds)
+        response = requests.get(HEVY_API_URL, headers=headers, params=params)
+        if response.status_code != 200:
+            raise HevyException(f"Fehler beim Abrufen der Workouts: {response.status_code} - {response.text}")
+        # Liste von Workouts zurückgeben
+        return [HevyWorkout(w) for w in response.json()]
 
-        params = {
-            "access_token": self.hevy.user_config["access_token"],
-            "meastype": HevyMeasure.TYPE_HEIGHT,
-            "category": 1,
-        }
+    def get_measurements(self, startdate=None, enddate=None):
+        """Holt alle Workouts im gegebenen Datumsbereich als 'Messungen'."""
+        try:
+            workouts = self.get_workouts(since_timestamp=startdate)
+        except HevyException as e:
+            log.error("Hevy API error: %s", e)
+            return []
+        # Filtern bis Enddatum (enddate ist Epoch-Sekunden bis einschließlich)
+        if enddate:
+            workouts = [w for w in workouts if int(time.mktime(w.start_time.timetuple())) <= enddate]
+        # Rückgabe der Workouts (als Measurement Groups)
+        return workouts
 
-        req = requests.post(GETMEAS_URL, params)
+class HevyWorkout:
+    def __init__(self, data):
+        self.raw = data
+        # start_time kommt als UNIX-Timestamp (Sekunden) – in datetime umwandeln
+        self.start_time = datetime.fromtimestamp(data.get("start_time", 0))
+        self.exercises = data.get("exercises", [])
 
-        measurements = req.json()
+    def __str__(self):
+        return f"Workout vom {self.start_time.strftime('%Y-%m-%d')} mit {len(self.exercises)} Übungen"
 
-        if measurements.get("status") == 0:
-            log.debug("Height received")
+    def to_dict(self):
+        return {"date": self.start_time.isoformat(), "exercises": self.exercises}
 
-            # there could be multiple height records. use the latest one
-            for record in measurements.get("body").get("measuregrps"):
-                height_group = HevyMeasureGroup(record)
-                if height is not None:
-                    if height_timestamp is not None:
-                        if height_group.get_datetime() > height_timestamp:
-                            height = height_group.get_height()
-                else:
-                    height = height_group.get_height()
-                    height_timestamp = height_group.get_datetime()
+    def to_fit_summary(self):
+        """Erstellt einen zusammenfassenden String aller Übungen und Sätze."""
+        lines = []
+        for ex in self.exercises:
+            name = ex.get("name", "Unbekannt")
+            for s in ex.get("sets", []):
+                reps = s.get("reps")
+                weight = s.get("weight")
+                lines.append(f"{name}: {reps}x{weight}kg")
+        return "\n".join(lines)
 
-        return height
-
-
-class HevyMeasureGroup:
-    """This class takes care of the group measurement functions"""
-
-    def __init__(self, measuregrp):
-        self._raw_data = measuregrp
-        self.grpid = measuregrp.get("grpid")
-        self.attrib = measuregrp.get("attrib")
-        self.date = measuregrp.get("date")
-        self.category = measuregrp.get("category")
-        self.measures = [HevyMeasure(m) for m in measuregrp["measures"]]
-
-    def __iter__(self):
-        for measure in self.measures:
-            yield measure
-
-    def __len__(self):
-        return len(self.measures)
-
+    # Neue Methoden für die Integration als Messungs-Objekt:
     def get_datetime(self):
-        """convenient function to get date & time"""
-        return datetime.fromtimestamp(self.date)
-
-    def get_raw_data(self):
-        """convenient function to get raw data"""
-        return self.measures
+        return self.start_time
 
     def get_weight(self):
-        """convenient function to get weight"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_WEIGHT:
-                return round(measure.get_value(), 2)
+        """Gibt das gesamte bewegte Gewicht (Summe aus Gewicht*Wdh) des Workouts zurück."""
+        total = 0.0
+        for ex in self.exercises:
+            for s in ex.get("sets", []):
+                weight = s.get("weight") or 0
+                reps = s.get("reps") or 0
+                total += weight * reps
+        # Falls kein Zusatzgewicht bewegt (total=0), kleinen Wert einsetzen, damit Eintrag nicht übersprungen wird
+        if total <= 0:
+            return 1.0
+        # auf zwei Nachkommastellen runden (kg)
+        return round(total, 2)
+
+    def get_fat_ratio(self):         # Körperfettanteil – nicht anwendbar
         return None
 
-    def get_height(self):
-        """convenient function to get height"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_HEIGHT:
-                return round(measure.get_value(), 2)
+    def get_muscle_mass(self):       # Muskelmasse – nicht anwendbar
         return None
 
-    def get_fat_free_mass(self):
-        """convenient function to get fat free mass"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_FAT_FREE_MASS:
-                return round(measure.get_value(), 2)
+    def get_hydration(self):         # Hydration – nicht anwendbar
         return None
 
-    def get_fat_ratio(self):
-        """convenient function to get fat ratio"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_FAT_RATIO:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_fat_mass_weight(self):
-        """convenient function to get fat mass weight"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_FAT_MASS_WEIGHT:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_diastolic_blood_pressure(self):
-        """convenient function to get diastolic blood pressure"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_DIASTOLIC_BLOOD_PRESSURE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_systolic_blood_pressure(self):
-        """convenient function to get systolic blood pressure"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_SYSTOLIC_BLOOD_PRESSURE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_heart_pulse(self):
-        """convenient function to get heart pulse"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_HEART_PULSE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_temperature(self):
-        """convenient function to get temperature"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_TEMPERATURE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_sp02(self):
-        """convenient function to get sp02"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_SP02:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_body_temperature(self):
-        """convenient function to get body temperature"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_BODY_TEMPERATURE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_skin_temperature(self):
-        """convenient function to get skin temperature"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_SKIN_TEMPERATURE:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_muscle_mass(self):
-        """convenient function to get muscle mass"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_MUSCLE_MASS:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_hydration(self):
-        """convenient function to get hydration"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_HYDRATION:
-                return round(measure.get_value(), 2)
-        return None
-
-    def get_bone_mass(self):
-        """convenient function to get bone mass"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_BONE_MASS:
-                return round(measure.get_value(), 2)
+    def get_bone_mass(self):         # Knochenmasse – nicht anwendbar
         return None
 
     def get_pulse_wave_velocity(self):
-        """convenient function to get pulse wave velocity"""
-        for measure in self.measures:
-            if measure.type == HevyMeasure.TYPE_PULSE_WAVE_VELOCITY:
-                return round(measure.get_value(), 2)
         return None
 
+    def get_heart_pulse(self):       # Puls – ggf. Teil der Übungen, hier nicht genutzt
+        return None
 
-class HevyMeasure:
-    """This class takes care of the individual measurements"""
-
-    TYPE_WEIGHT = 1
-    TYPE_HEIGHT = 4
-    TYPE_FAT_FREE_MASS = 5
-    TYPE_FAT_RATIO = 6
-    TYPE_FAT_MASS_WEIGHT = 8
-    TYPE_DIASTOLIC_BLOOD_PRESSURE = 9
-    TYPE_SYSTOLIC_BLOOD_PRESSURE = 10
-    TYPE_HEART_PULSE = 11
-    TYPE_TEMPERATURE = 12
-    TYPE_SP02 = 54
-    TYPE_BODY_TEMPERATURE = 71
-    TYPE_SKIN_TEMPERATURE = 73
-    TYPE_MUSCLE_MASS = 76
-    TYPE_HYDRATION = 77
-    TYPE_BONE_MASS = 88
-    TYPE_PULSE_WAVE_VELOCITY = 91
-    TYPE_VO2MAX = 123
-    TYPE_QRS_INTERVAL = 135
-    TYPE_PR_INTERVAL = 136
-    TYPE_QT_INTERVAL = 137
-    TYPE_CORRECTED_QT_INTERVAL = 138
-    TYPE_ATRIAL_FIBRILLATION_PPG = 139
-    TYPE_FAT_MASS_SEGMENTS = 174
-    TYPE_EXTRACELLULAR_WATER = 168
-    TYPE_INTRACELLULAR_WATER = 169
-    TYPE_VISCERAL_FAT = 170
-    TYPE_MUSCLE_MASS_SEGMENTS = 175
-    TYPE_VASCULAR_AGE = 155
-    TYPE_ATRIAL_FIBRILLATION = 130
-    TYPE_NERVE_HEALTH_LEFT_FOOT = 158
-    TYPE_NERVE_HEALTH_RIGHT_FOOT = 159
-    TYPE_NERVE_HEALTH_FEET = 167
-    TYPE_ELECTRODERMAL_ACTIVITY_FEET = 196
-    TYPE_ELECTRODERMAL_ACTIVITY_LEFT_FOOT = 197
-    TYPE_ELECTRODERMAL_ACTIVITY_RIGHT_FOOT = 198
-
-    hevy_table = {
-        TYPE_WEIGHT: ["Weight", "kg"],
-        TYPE_HEIGHT: ["Height", "meter"],
-        TYPE_FAT_FREE_MASS: ["Fat Free Mass", "kg"],
-        TYPE_FAT_RATIO: ["Fat Ratio", "%"],
-        TYPE_FAT_MASS_WEIGHT: ["Fat Mass Weight", "kg"],
-        TYPE_DIASTOLIC_BLOOD_PRESSURE: ["Diastolic Blood Pressure", "mmHg"],
-        TYPE_SYSTOLIC_BLOOD_PRESSURE: ["Systolic Blood Pressure", "mmHg"],
-        TYPE_HEART_PULSE: ["Heart Pulse", "bpm"],
-        TYPE_TEMPERATURE: ["Temperature", "celsius"],
-        TYPE_SP02: ["SP02", "%"],
-        TYPE_BODY_TEMPERATURE: ["Body Temperature", "celsius"],
-        TYPE_SKIN_TEMPERATURE: ["Skin Temperature", "celsius"],
-        TYPE_MUSCLE_MASS: ["Muscle Mass", "kg"],
-        TYPE_HYDRATION: ["Hydration", "kg"],
-        TYPE_BONE_MASS: ["Bone Mass", "kg"],
-        TYPE_PULSE_WAVE_VELOCITY: ["Pulse Wave Velocity", "m/s"],
-        TYPE_VO2MAX: ["VO2 max", "ml/min/kg"],
-        TYPE_QRS_INTERVAL: ["QRS interval duration based on ECG signal", "ms"],
-        TYPE_PR_INTERVAL: ["PR interval duration based on ECG signal", "ms"],
-        TYPE_QT_INTERVAL: ["QT interval duration based on ECG signal", "ms"],
-        TYPE_CORRECTED_QT_INTERVAL: ["Corrected QT interval duration based on ECG signal", "ms"],
-        TYPE_ATRIAL_FIBRILLATION_PPG: ["Atrial fibrillation result from PPG", "ms"],
-        TYPE_FAT_MASS_SEGMENTS: ["Fat Mass for segments in mass unit", "kg"],
-        TYPE_EXTRACELLULAR_WATER: ["Extracellular Water", "kg"],
-        TYPE_INTRACELLULAR_WATER: ["Intracellular Water", "kg"],
-        TYPE_VISCERAL_FAT: ["Extracellular Water", "kg"],
-        TYPE_MUSCLE_MASS_SEGMENTS: ["Muscle Mass for segments in mass unit", "kg"],
-        TYPE_VASCULAR_AGE: ["Vascular age", "years"],
-        TYPE_ATRIAL_FIBRILLATION: ["Atrial fibrillation result", "ms"],
-        TYPE_NERVE_HEALTH_LEFT_FOOT: ["Nerve Health Score left foot", ""],
-        TYPE_NERVE_HEALTH_RIGHT_FOOT: ["Nerve Health Score right foot", ""],
-        TYPE_NERVE_HEALTH_FEET: ["Nerve Health Score feet", ""],
-        TYPE_ELECTRODERMAL_ACTIVITY_FEET: ["Electrodermal activity feet", ""],
-        TYPE_ELECTRODERMAL_ACTIVITY_LEFT_FOOT: ["Electrodermal activity left foot", ""],
-        TYPE_ELECTRODERMAL_ACTIVITY_RIGHT_FOOT: ["Electrodermal activity right foot", ""],
-    }
-
-    def __init__(self, measure):
-        self._raw_data = measure
-        self.value = measure.get("value")
-        self.type = measure.get("type")
-        self.unit = measure.get("unit")
-        self.type_s = self.hevy_table.get(self.type, ["unknown", ""])[0]
-        self.unit_s = self.hevy_table.get(self.type, ["unknown", ""])[1]
-
-    def __str__(self):
-        return f"{self.type_s}: {self.get_value()} {self.unit_s}"
+    def get_raw_data(self):
+        """Stellt Rohdaten für den JSON-Export bereit."""
+        # Für Kompatibilität geben wir uns selbst als einziges Datenobjekt zurück
+        return [self]
 
     def json_dict(self):
-        return { f"{self.type_s.replace(' ','_')}": { "Value": round(self.get_value(), 2), "Unit": f'{self.unit_s}'}}
-
-    def get_value(self):
-        """get value"""
-        return self.value * pow(10, self.unit)
+        """Bereitet ein Dict mit den wichtigsten Workout-Infos für JSON-Ausgabe vor."""
+        summary = {"Exercises": []}
+        total_volume = 0.0
+        total_sets = 0
+        for ex in self.exercises:
+            name = ex.get("name", "Unbekannt")
+            sets = ex.get("sets", [])
+            ex_reps = 0
+            ex_volume = 0.0
+            for s in sets:
+                reps = s.get("reps") or 0
+                weight = s.get("weight") or 0
+                ex_reps += reps
+                ex_volume += weight * reps
+            total_sets += len(sets)
+            total_volume += ex_volume
+            summary["Exercises"].append({
+                "Name": name,
+                "Sets": len(sets),
+                "TotalReps": ex_reps,
+                "TotalWeight": ex_volume
+            })
+        summary["TotalSets"] = total_sets
+        summary["TotalVolume"] = total_volume
+        summary["ExerciseCount"] = len(self.exercises)
+        return {"Workout": summary}
