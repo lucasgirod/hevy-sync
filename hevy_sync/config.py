@@ -1,5 +1,6 @@
 import os
 import logging
+import sys
 from dotenv import dotenv_values
 
 # Load environment variables from.env file
@@ -23,7 +24,9 @@ LOG_LEVEL = config.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=
+    handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
 )
 logger = logging.getLogger(__name__)
 

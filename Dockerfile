@@ -13,6 +13,8 @@ RUN pip install --upgrade pip
 RUN mkdir -p /src
 COPY . /src
 
+RUN ls -lisah /src
+
 RUN cd /src && \
     pip install .
 

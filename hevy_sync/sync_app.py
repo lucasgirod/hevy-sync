@@ -2,13 +2,13 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from config import (
+from .config import (
     HEVY_API_KEY, GARMIN_EMAIL, GARMIN_PASSWORD,
     GARMIN_TOKENS_FILE, LAST_SYNC_DATE_FILE, logger
 )
-from hevy_client import HevyClient
-from garmin_client import GarminClient
-from fit_generator import FitGenerator
+from .hevy_client import HevyClient
+from .garmin_client import GarminClient
+from .fit_generator import FitGenerator
 
 def get_last_sync_date() -> datetime:
     """Reads the last synchronization date from a file."""
